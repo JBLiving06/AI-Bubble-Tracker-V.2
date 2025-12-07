@@ -44,9 +44,9 @@
         whyItMatters: 'Narrow leadership preceded dot-com crash.',
         thresholds: 'Below 28% = healthy. Above 35% = extreme concentration.' },
       { key: 'debt-leverage', name: 'Corporate Leverage', category: 'Financial', safe: 0.4, warn: 0.6, unit: 'ratio',
-        meaning: 'Borrowing relative to ownership stake for major tech.',
-        calculation: 'Total debt / total equity for MSFT, GOOGL, META, NVDA.',
-        whyItMatters: 'Leverage amplifies downturns. 2008 was worsened by excessive leverage.',
+        meaning: 'Borrowing relative to ownership stake for AI infrastructure builders.',
+        calculation: 'Total debt / total equity for MSFT, GOOGL, META, NVDA, AMZN, ORCL (quarterly data).',
+        whyItMatters: 'Leverage amplifies downturns. Debt-heavy builders crash hardest if bubble bursts.',
         thresholds: 'Below 0.4 = conservative. Above 0.6 = elevated risk.' },
       { key: 'volatility', name: 'Complacency (VIX)', category: 'Sentiment', safe: 20, warn: 14, unit: 'VIX', inverted: true,
         meaning: 'Low VIX = investors expect calm. High = fear.',
@@ -150,8 +150,35 @@
         results['capex-revenue'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
       }
 
-      // 2. S&P P/E - FMP doesn't provide P/E for indices
-      results['valuation'] = { value: null, source: 'P/E not available for indices', quality: 'NO_DATA' };
+      // 2. S&P P/E (Valuation Heat) using EPS divisor method
+      console.log('Fetching Valuation (P/E)...');
+      try {
+        // Get live S&P 500 price
+        const spUrl = `${PROXY}/fmp/index?symbol=%5EGSPC`;
+        const spData = await fetchJSON(spUrl);
+        const spPrice = spData?.[0]?.price;
+        
+        if (spPrice) {
+          // S&P 500 TTM EPS updates quarterly. Current estimate ~$230 (Q3 2024)
+          // This is published by S&P and changes slowly relative to price
+          const SP500_EPS = 230;
+          const pe = spPrice / SP500_EPS;
+          
+          console.log(`P/E calculated: ${spPrice} / ${SP500_EPS} = ${pe.toFixed(2)}`);
+          
+          results['valuation'] = { 
+            value: pe, 
+            source: 'Calc (Price / EPS)', 
+            quality: 'LAGGED',
+            note: `S&P ${spPrice.toFixed(0)} / TTM EPS $${SP500_EPS} (quarterly update)`
+          };
+        } else {
+          throw new Error('Could not fetch S&P 500 price');
+        }
+      } catch (e) {
+        console.error('Valuation error:', e);
+        results['valuation'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
+      }
 
       // 3. Market Concentration (now using dynamic S&P 500 total via divisor method)
       console.log('Fetching Market Concentration...');
@@ -210,25 +237,44 @@
       // 4. Corporate Leverage (DECISION GRADE)
       console.log('Fetching Corporate Leverage...');
       try {
+        // EXPANDED LIST: Added AMZN (critical for infra debt) and ORCL
+        // These are the "builders" - companies with debt-heavy infrastructure spending
+        // Excludes AAPL (their debt is for buybacks, not AI risk)
+        const builders = ['MSFT', 'GOOGL', 'META', 'NVDA', 'AMZN', 'ORCL'];
+        
         let totalDebt = 0, totalEquity = 0, successCount = 0;
-        for (const sym of ['MSFT', 'GOOGL', 'META', 'NVDA']) {
+        
+        for (const sym of builders) {
           try {
+            // The balance endpoint already returns quarterly by default
             const url = `${PROXY}/fmp/balance?symbol=${sym}`;
             console.log('Fetching', url);
             const bs = await fetchJSON(url);
-            console.log(`${sym} debt:`, bs?.[0]?.totalDebt, 'equity:', bs?.[0]?.totalStockholdersEquity);
-            if (bs?.[0]) {
-              totalDebt += bs[0].totalDebt || 0;
-              totalEquity += bs[0].totalStockholdersEquity || 0;
+            const quarter = bs?.[0]; // Most recent quarter
+            
+            console.log(`${sym} Debt:`, quarter?.totalDebt, 'Equity:', quarter?.totalStockholdersEquity);
+            
+            if (quarter) {
+              totalDebt += quarter.totalDebt || 0;
+              totalEquity += quarter.totalStockholdersEquity || 0;
               successCount++;
             }
           } catch (e) { 
             console.log(`Balance failed for ${sym}:`, e.message); 
           }
         }
+        
         console.log('Leverage totals:', totalDebt, totalEquity, successCount);
-        if (successCount >= 2 && totalEquity > 0) {
-          results['debt-leverage'] = { value: totalDebt / totalEquity, source: `FMP (${successCount}/4)`, quality: 'LIVE' };
+        
+        // Need at least 3 companies for valid sector trend
+        if (successCount >= 3 && totalEquity > 0) {
+          const ratio = totalDebt / totalEquity;
+          results['debt-leverage'] = { 
+            value: ratio, 
+            source: `FMP (${successCount}/${builders.length} Builders)`, 
+            quality: 'LIVE',
+            note: `Includes MSFT, GOOGL, META, NVDA, AMZN, ORCL (Quarterly)`
+          };
         } else {
           results['debt-leverage'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
         }
