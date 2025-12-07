@@ -35,7 +35,7 @@
         thresholds: 'Below 0.30 = normal. 0.30-0.50 = aggressive. Above 0.50 = potentially unsustainable.' },
       { key: 'valuation', name: 'Valuation Heat', category: 'Valuation', safe: 22, warn: 30, unit: 'P/E',
         meaning: 'How many years of current earnings you pay for the market.',
-        calculation: 'S&P 500 price divided by trailing 12-month earnings.',
+        calculation: 'S&P 500 price divided by TTM earnings ($230 EPS, updated quarterly).',
         whyItMatters: 'P/E above 25-30 has preceded major corrections.',
         thresholds: 'Below 22 = reasonable. 22-30 = elevated. Above 30 = historically unsustainable.' },
       { key: 'market-concentration', name: 'Market Concentration', category: 'Market Structure', safe: 28, warn: 35, unit: '%',
@@ -58,16 +58,16 @@
         calculation: 'ICE BofA US High Yield spread from FRED.',
         whyItMatters: 'Pre-2008 spreads were extremely tight.',
         thresholds: 'Above 4.5% = appropriate. Below 3% = ignoring risk.' },
-      { key: 'app-maturity', name: 'AI App Maturity', category: 'Adoption', safe: 60, warn: 40, unit: 'score', inverted: true,
-        meaning: 'Score 0-100. Low = mostly pilots. High = production with ROI.',
-        calculation: 'Claude AI analysis of earnings call language. DOES NOT DRIVE ASSESSMENT.',
-        whyItMatters: 'If AI infra exceeds real usage, bubble risk rises.',
-        thresholds: 'Above 60 = mature. Below 40 = infrastructure ahead of applications.' },
-      { key: 'mag7-breadth', name: 'Mag 7 Dominance', category: 'Market Structure', safe: 25, warn: 30, unit: '%',
-        meaning: 'Magnificent 7 share of market performance.',
-        calculation: 'Calculated from individual returns. NOTE: Uses assumptions.',
-        whyItMatters: 'Narrow leadership = fragile market.',
-        thresholds: 'Below 25% = broad participation. Above 30% = extreme dependence.' },
+      { key: 'chip-glut', name: 'Chip Glut (Inventory)', category: 'Supply Chain', safe: 90, warn: 120, unit: 'days',
+        meaning: 'Days of inventory on hand for AI chip suppliers. High = chips piling up unsold.',
+        calculation: 'Average days of inventory for NVDA, AMD, AVGO, SMCI (TTM data).',
+        whyItMatters: 'Cisco had 120+ days inventory before dot-com crash. Rising inventory = demand slowdown.',
+        thresholds: 'Below 90 days = healthy demand. Above 120 days = glut forming.' },
+      { key: 'shadow-leverage', name: 'Shadow Leverage', category: 'Financial Engineering', safe: 30, warn: 60, unit: 'score',
+        meaning: 'Composite risk score detecting channel stuffing (DSO) and hidden debt (capital leases).',
+        calculation: 'DSO risk (NVDA/SMCI payment delays) + Lease risk (AMZN/MSFT off-balance sheet debt).',
+        whyItMatters: 'Lucent crashed 99% from channel stuffing. Enron hid debt in leases. Both are bubble signals.',
+        thresholds: 'Below 30 = healthy terms. 30-60 = loosening. Above 60 = financial engineering risk.' },
     ];
 
     let gaugeData = {};
@@ -76,8 +76,6 @@
     let debateEssays = null;
     let isGeneratingDebate = false;
     let selectedGauge = null;
-    let isAnalyzingMaturity = false;
-    let maturityAnalysis = null;
 
     function getRiskLevel(value, gauge) {
       if (value === null || value === undefined) return null;
@@ -317,86 +315,138 @@
         results['credit-spread'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
       }
 
-      // 7. AI App Maturity (AI_ANALYZED - context only)
-      if (maturityAnalysis && maturityAnalysis.score) {
-        results['app-maturity'] = { 
-          value: maturityAnalysis.score, 
-          source: `Claude (${maturityAnalysis.assessment_date})`, 
-          quality: 'AI_ANALYZED',
-          reasoning: maturityAnalysis.reasoning,
-          signals: maturityAnalysis.key_signals,
-          note: 'AI estimate - does not affect assessment'
-        };
-      } else {
-        results['app-maturity'] = { value: null, source: 'Click "Analyze AI Maturity"', quality: 'AWAITING_ANALYSIS' };
-      }
-
-      // 8. Mag 7 Dominance (APPROXIMATE - context only)
-      console.log('Fetching Mag7...');
+      // 7. Chip Glut / Inventory Risk (DECISION GRADE)
+      // Tracks days of inventory for AI chip supply chain
+      // High inventory = chips piling up unsold = demand slowdown
+      console.log('Fetching Chip Glut (Inventory)...');
       try {
-        const mag7 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA'];
-        let totalReturn = 0, successCount = 0;
+        // NVDA = Merchant GPU (H100/Blackwell)
+        // AMD = Challenger (MI300)
+        // AVGO = Custom Silicon (builds Google TPUs, Meta MTIA)
+        // SMCI = Server Integrator (the "box" that holds chips)
+        const supplyChain = ['NVDA', 'AMD', 'AVGO', 'SMCI'];
         
-        for (const sym of mag7) {
+        let totalDays = 0, successCount = 0;
+        
+        for (const sym of supplyChain) {
           try {
-            const url = `${PROXY}/fmp/profile?symbol=${sym}`;
-            const q = await fetchJSON(url);
-            console.log(`${sym} changePercentage:`, q?.[0]?.changePercentage);
-            if (q?.[0]?.changePercentage !== undefined) {
-              totalReturn += q[0].changePercentage;
+            const url = `${PROXY}/fmp/metrics?symbol=${sym}`;
+            console.log('Fetching', url);
+            const data = await fetchJSON(url);
+            const dsi = data?.[0]?.daysOfInventoryOutstandingTTM;
+            
+            console.log(`${sym} Days of Inventory:`, dsi);
+            
+            if (dsi && dsi > 0) {
+              totalDays += dsi;
               successCount++;
             }
-          } catch (e) { 
-            console.log(`Mag7 failed for ${sym}:`, e.message); 
+          } catch (e) {
+            console.log(`Inventory failed for ${sym}:`, e.message);
           }
         }
         
-        console.log('Mag7 totals:', totalReturn, successCount);
-        if (successCount >= 5) {
-          const avgReturn = totalReturn / successCount;
-          const dominanceProxy = Math.min(Math.max(25 + avgReturn * 0.5, 15), 50);
-          results['mag7-breadth'] = { 
-            value: dominanceProxy, 
-            source: `FMP (${successCount}/7) - proxy calc`, 
-            quality: 'APPROXIMATE',
-            note: 'Calculated proxy, not actual index contribution'
+        console.log('Inventory totals:', totalDays, successCount);
+        
+        if (successCount >= 2) {
+          const avgDays = totalDays / successCount;
+          results['chip-glut'] = {
+            value: avgDays,
+            source: `FMP (${successCount}/${supplyChain.length} suppliers)`,
+            quality: 'LAGGED',
+            note: `Avg days inventory: NVDA, AMD, AVGO, SMCI`
           };
         } else {
-          results['mag7-breadth'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
+          results['chip-glut'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
         }
       } catch (e) {
-        console.error('Mag7 error:', e);
-        results['mag7-breadth'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
+        console.error('Chip Glut error:', e);
+        results['chip-glut'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
+      }
+
+      // 8. Shadow Leverage (The "Lucent/Enron" Indicator)
+      // Detects: A) Channel stuffing (DSO) B) Hidden debt (Capital Leases)
+      console.log('Fetching Shadow Leverage...');
+      try {
+        // PART A: Vendor Financing Risk (DSO)
+        // If NVDA/SMCI are getting paid slower, customers may be struggling
+        const sellers = ['NVDA', 'SMCI'];
+        let avgDSO = 0, dsoCount = 0;
+        
+        for (const sym of sellers) {
+          try {
+            const url = `${PROXY}/fmp/metrics?symbol=${sym}`;
+            const data = await fetchJSON(url);
+            const dso = data?.[0]?.daysOfSalesOutstandingTTM;
+            
+            if (dso && dso > 0) {
+              console.log(`${sym} DSO:`, dso.toFixed(1));
+              avgDSO += dso;
+              dsoCount++;
+            }
+          } catch (e) {
+            console.log(`DSO failed for ${sym}:`, e.message);
+          }
+        }
+        const sectorDSO = dsoCount > 0 ? avgDSO / dsoCount : 0;
+
+        // PART B: Hidden Cloud Debt (Capital Leases)
+        // AMZN and MSFT use massive leases to fund data centers off-balance sheet
+        const leasers = ['AMZN', 'MSFT'];
+        let totalLeaseDebt = 0, totalRevenue = 0, leaseCount = 0;
+
+        for (const sym of leasers) {
+          try {
+            const bsUrl = `${PROXY}/fmp/balance?symbol=${sym}`;
+            const incUrl = `${PROXY}/fmp/income?symbol=${sym}`;
+            
+            const [bs, inc] = await Promise.all([fetchJSON(bsUrl), fetchJSON(incUrl)]);
+            
+            if (bs?.[0] && inc?.[0]) {
+              // Capital Leases are effectively debt hidden in liabilities
+              const leases = bs[0].capitalLeaseObligations || bs[0].operatingLeaseObligations || 0;
+              const rev = inc[0].revenue || 1;
+              
+              console.log(`${sym} Leases: $${(leases/1e9).toFixed(2)}B, Rev: $${(rev/1e9).toFixed(2)}B`);
+              totalLeaseDebt += leases;
+              totalRevenue += rev;
+              leaseCount++;
+            }
+          } catch (e) {
+            console.log(`Lease failed for ${sym}:`, e.message);
+          }
+        }
+        
+        // METRIC: Lease Debt as % of Revenue
+        const leaseRatio = totalRevenue > 0 ? (totalLeaseDebt / totalRevenue) : 0;
+        
+        // COMPOSITE SCORE (0-100 Risk)
+        // Normal DSO for hardware: 45-60 days. >80 = channel stuffing danger
+        // Normal Lease/Rev ratio: ~0.10. >0.25 = over-leveraged
+        const dsoRisk = Math.max(0, (sectorDSO - 60) * 2); // Every day over 60 adds 2 points
+        const leaseRisk = Math.max(0, (leaseRatio - 0.15) * 400); // Every 1% over 15% adds 4 points
+        
+        const shadowScore = Math.min(dsoRisk + leaseRisk, 100);
+
+        console.log('Shadow Leverage:', { sectorDSO, leaseRatio, dsoRisk, leaseRisk, shadowScore });
+
+        if (dsoCount > 0 || leaseCount > 0) {
+          results['shadow-leverage'] = {
+            value: shadowScore,
+            source: `DSO (${dsoCount}/2) + Leases (${leaseCount}/2)`,
+            quality: 'LAGGED',
+            note: `DSO: ${sectorDSO.toFixed(0)}d | Lease/Rev: ${(leaseRatio*100).toFixed(1)}%`
+          };
+        } else {
+          results['shadow-leverage'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
+        }
+      } catch (e) {
+        console.error('Shadow Leverage error:', e);
+        results['shadow-leverage'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
       }
 
       console.log('Final results:', results);
       return results;
-    }
-
-    async function analyzeMaturity() {
-      isAnalyzingMaturity = true;
-      render();
-      
-      try {
-        const resp = await fetch(`${PROXY}/analyze-maturity`, { method: 'POST' });
-        const data = await resp.json();
-        if (data.score && !data.error) {
-          maturityAnalysis = data;
-          gaugeData['app-maturity'] = {
-            value: data.score,
-            source: `Claude (${data.assessment_date})`,
-            quality: 'AI_ANALYZED',
-            reasoning: data.reasoning,
-            signals: data.key_signals,
-            note: 'AI estimate - does not affect assessment'
-          };
-        }
-      } catch (e) {
-        console.error('Maturity analysis failed:', e);
-      }
-      
-      isAnalyzingMaturity = false;
-      render();
     }
 
     async function fetchAllData() {
@@ -561,24 +611,18 @@ ${contextText || 'None available'}`;
               <div class="text-center"><div class="text-3xl font-bold text-emerald-400">${counts.safe}</div><div class="text-xs text-slate-500 uppercase">Safe</div></div>
               <div class="text-center"><div class="text-3xl font-bold text-amber-400">${counts.warning}</div><div class="text-xs text-slate-500 uppercase">Warning</div></div>
               <div class="text-center"><div class="text-3xl font-bold text-red-400">${counts.danger}</div><div class="text-xs text-slate-500 uppercase">Danger</div></div>
-              <div class="text-center border-l border-slate-700 pl-4"><div class="text-3xl font-bold text-slate-500">${totalContext}</div><div class="text-xs text-slate-500 uppercase">Context</div></div>
-              <div class="text-center"><div class="text-3xl font-bold text-slate-600">${totalNoData}</div><div class="text-xs text-slate-500 uppercase">No Data</div></div>
+              <div class="text-center border-l border-slate-700 pl-4"><div class="text-3xl font-bold text-slate-600">${totalNoData}</div><div class="text-xs text-slate-500 uppercase">No Data</div></div>
             </div>
           </div>
           <div class="mt-6 h-3 rounded-full overflow-hidden bg-slate-800 flex">
             <div class="h-full bg-emerald-500" style="width: ${(counts.safe / 8) * 100}%"></div>
             <div class="h-full bg-amber-500" style="width: ${(counts.warning / 8) * 100}%"></div>
             <div class="h-full bg-red-500" style="width: ${(counts.danger / 8) * 100}%"></div>
-            <div class="h-full bg-slate-500" style="width: ${(totalContext / 8) * 100}%"></div>
             <div class="h-full bg-slate-700" style="width: ${(totalNoData / 8) * 100}%"></div>
           </div>
         </div>
 
         <div class="mb-6 flex flex-wrap gap-3 justify-end">
-          <button onclick="analyzeMaturity()" class="px-4 py-2 bg-indigo-500/20 text-indigo-400 rounded-lg hover:bg-indigo-500/30 transition flex items-center gap-2" ${isAnalyzingMaturity ? 'disabled' : ''}>
-            ${isAnalyzingMaturity ? '<span class="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></span>' : '🔍'}
-            ${isAnalyzingMaturity ? 'Analyzing...' : 'Analyze AI Maturity'}
-          </button>
           <button onclick="generateDebate()" class="px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition flex items-center gap-2" ${isGeneratingDebate ? 'disabled' : ''}>
             ${isGeneratingDebate ? '<span class="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></span>' : '💬'}
             ${isGeneratingDebate ? 'Generating...' : 'Generate Debate'}
@@ -663,9 +707,9 @@ ${contextText || 'None available'}`;
         ` : ''}
 
         <h3 class="text-lg font-bold mb-3 text-slate-300">Decision-Grade Gauges</h3>
-        <p class="text-xs text-slate-500 mb-4">Only LIVE and LAGGED data drives the assessment</p>
+        <p class="text-xs text-slate-500 mb-4">All gauges are LIVE or LAGGED and drive the assessment</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          ${GAUGES.filter(g => !['mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
+          ${GAUGES.map(g => {
             const d = gaugeData[g.key];
             const hasData = d?.value !== null && d?.value !== undefined;
             const level = hasData ? getRiskLevel(d.value, g) : null;
@@ -689,28 +733,6 @@ ${contextText || 'None available'}`;
           }).join('')}
         </div>
 
-        <h3 class="text-lg font-bold mb-3 text-slate-400">Context Gauges</h3>
-        <p class="text-xs text-slate-500 mb-4">Displayed for reference but DO NOT affect the assessment</p>
-        <div class="grid grid-cols-2 gap-4 mb-8">
-          ${GAUGES.filter(g => ['mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
-            const d = gaugeData[g.key];
-            const hasData = d?.value !== null && d?.value !== undefined;
-            const colors = { bg: 'rgba(100,116,139,0.08)', border: 'rgba(100,116,139,0.25)', text: '#94a3b8' };
-            const isSelected = selectedGauge === g.key;
-            
-            return `
-              <div onclick="selectGauge('${g.key}')" class="p-4 rounded-xl cursor-pointer hover:scale-105 transition-all context-only ${isSelected ? 'ring-2 ring-slate-500' : ''} ${!hasData ? 'no-data' : ''}" style="background: ${colors.bg}; border: 1px dashed ${colors.border};">
-                <div class="flex justify-between items-start mb-1">
-                  <div class="text-xs text-slate-500 uppercase">${g.category}</div>
-                  ${getQualityBadge(d?.quality)}
-                </div>
-                <div class="text-sm font-semibold text-slate-300 mb-3">${g.name}</div>
-                <div class="text-2xl font-bold mb-1" style="color: ${colors.text}">${hasData ? formatValue(d.value, g) : 'No Data'}</div>
-                <div class="text-xs text-slate-500 truncate">${d?.source || 'Unavailable'}</div>
-              </div>`;
-          }).join('')}
-        </div>
-
         <div class="bg-slate-800/50 rounded-xl p-6 mb-8">
           <h2 class="text-lg font-bold mb-4">Risk Framework</h2>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -722,17 +744,15 @@ ${contextText || 'None available'}`;
         </div>
 
         <div class="bg-slate-800/30 rounded-xl p-4 mb-8">
-          <h3 class="text-sm font-semibold text-slate-400 mb-2">Data Quality Tiers</h3>
+          <h3 class="text-sm font-semibold text-slate-400 mb-2">Data Quality</h3>
           <div class="flex flex-wrap items-center gap-4 text-xs">
-            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span><span class="text-slate-400"><strong>Live</strong> = Real-time API → Drives assessment</span></span>
-            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-amber-400 rounded-full"></span><span class="text-slate-400"><strong>Lagged</strong> = Quarterly data → Drives assessment</span></span>
-            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-slate-400 rounded-full"></span><span class="text-slate-400"><strong>Approx</strong> = Has assumptions → Context only</span></span>
-            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-indigo-400 rounded-full"></span><span class="text-slate-400"><strong>AI</strong> = Claude estimate → Context only</span></span>
-            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-red-400 rounded-full"></span><span class="text-slate-400"><strong>No Data</strong> = API failed → Excluded</span></span>
+            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span><span class="text-slate-400"><strong>Live</strong> = Real-time API data</span></span>
+            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-amber-400 rounded-full"></span><span class="text-slate-400"><strong>Lagged</strong> = Quarterly/TTM data</span></span>
+            <span class="flex items-center gap-2"><span class="w-2 h-2 bg-red-400 rounded-full"></span><span class="text-slate-400"><strong>No Data</strong> = API failed</span></span>
           </div>
         </div>
 
-        <div class="text-center text-slate-600 text-xs">Only Live + Lagged gauges affect the assessment • Context gauges shown for reference only • Not investment advice</div>
+        <div class="text-center text-slate-600 text-xs">8 decision-grade gauges • All data from FMP and FRED APIs • Not investment advice</div>
       `;
     }
 
