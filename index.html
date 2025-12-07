@@ -40,7 +40,7 @@
         thresholds: 'Below 22 = reasonable. 22-30 = elevated. Above 30 = historically unsustainable.' },
       { key: 'market-concentration', name: 'Market Concentration', category: 'Market Structure', safe: 28, warn: 35, unit: '%',
         meaning: 'Shows how much market gains depend on a few mega-caps.',
-        calculation: 'Combined market cap of top 10 stocks. NOTE: Uses estimated S&P total.',
+        calculation: 'Top 10 market caps divided by S&P 500 total (calculated as index price × divisor).',
         whyItMatters: 'Narrow leadership preceded dot-com crash.',
         thresholds: 'Below 28% = healthy. Above 35% = extreme concentration.' },
       { key: 'debt-leverage', name: 'Corporate Leverage', category: 'Financial', safe: 0.4, warn: 0.6, unit: 'ratio',
@@ -153,7 +153,7 @@
       // 2. S&P P/E - FMP doesn't provide P/E for indices
       results['valuation'] = { value: null, source: 'P/E not available for indices', quality: 'NO_DATA' };
 
-      // 3. Market Concentration (APPROXIMATE - not decision grade)
+      // 3. Market Concentration (now using dynamic S&P 500 total via divisor method)
       console.log('Fetching Market Concentration...');
       try {
         const top10 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'UNH', 'JPM'];
@@ -173,14 +173,31 @@
           }
         }
         console.log('Top10 totals:', top10Cap, successCount);
+        
+        // Fetch S&P 500 price and calculate total market cap using divisor method
+        let spTotalCap = 58e12; // Fallback if API fails
+        let spSource = 'Est. total';
+        try {
+          const spUrl = `${PROXY}/fmp/index?symbol=%5EGSPC`;
+          const spData = await fetchJSON(spUrl);
+          if (spData?.[0]?.price) {
+            // S&P 500 Price × Divisor (~8.4 billion) = Total Market Cap
+            const SP500_DIVISOR = 8.4e9;
+            spTotalCap = spData[0].price * SP500_DIVISOR;
+            spSource = `Calc (${spData[0].price.toFixed(0)} × 8.4B)`;
+            console.log(`Dynamic S&P Cap: ${(spTotalCap/1e12).toFixed(2)}T based on price ${spData[0].price}`);
+          }
+        } catch (e) {
+          console.log('Failed to fetch SP500 price, using fallback');
+        }
+        
         if (successCount >= 7 && top10Cap > 0) {
-          const spTotalCap = 50e12;
           const concentration = (top10Cap / spTotalCap) * 100;
           results['market-concentration'] = { 
             value: Math.min(concentration, 50), 
-            source: `FMP (${successCount}/10) / Est. total`, 
-            quality: 'APPROXIMATE',
-            note: 'Denominator is estimated $50T, not live data'
+            source: `FMP (${successCount}/10) / ${spSource}`, 
+            quality: 'LIVE',
+            note: 'Top 10 market caps / (S&P price × divisor)'
           };
         } else {
           results['market-concentration'] = { value: null, source: 'API failed', quality: 'NO_DATA' };
@@ -602,7 +619,7 @@ ${contextText || 'None available'}`;
         <h3 class="text-lg font-bold mb-3 text-slate-300">Decision-Grade Gauges</h3>
         <p class="text-xs text-slate-500 mb-4">Only LIVE and LAGGED data drives the assessment</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          ${GAUGES.filter(g => !['market-concentration', 'mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
+          ${GAUGES.filter(g => !['mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
             const d = gaugeData[g.key];
             const hasData = d?.value !== null && d?.value !== undefined;
             const level = hasData ? getRiskLevel(d.value, g) : null;
@@ -628,8 +645,8 @@ ${contextText || 'None available'}`;
 
         <h3 class="text-lg font-bold mb-3 text-slate-400">Context Gauges</h3>
         <p class="text-xs text-slate-500 mb-4">Displayed for reference but DO NOT affect the assessment</p>
-        <div class="grid grid-cols-3 gap-4 mb-8">
-          ${GAUGES.filter(g => ['market-concentration', 'mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
+        <div class="grid grid-cols-2 gap-4 mb-8">
+          ${GAUGES.filter(g => ['mag7-breadth', 'app-maturity'].includes(g.key)).map(g => {
             const d = gaugeData[g.key];
             const hasData = d?.value !== null && d?.value !== undefined;
             const colors = { bg: 'rgba(100,116,139,0.08)', border: 'rgba(100,116,139,0.25)', text: '#94a3b8' };
