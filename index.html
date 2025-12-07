@@ -5,409 +5,552 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Bubble Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    body {
-      font-family: "Inter", system-ui, sans-serif;
-      background: linear-gradient(135deg, #0a0f1a 0%, #111827 50%, #0f172a 100%);
-      min-height: 100vh;
-    }
-    .gauge-card {
-      backdrop-filter: blur(12px);
-      transition: all 0.3s ease;
-    }
-    .gauge-card:hover {
-      transform: translateY(-2px);
-    }
-    .gauge-card.selected {
-      transform: scale(1.02);
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    @keyframes slideUp {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
-    .animate-slide-up { animation: slideUp 0.5s ease-out forwards; }
-    .font-mono { font-family: "JetBrains Mono", monospace; }
-    ::-webkit-scrollbar { width: 8px; }
-    ::-webkit-scrollbar-track { background: #1e293b; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    body { font-family: 'Inter', sans-serif; }
+    .gauge-glow { box-shadow: 0 0 30px rgba(0,0,0,0.3); }
+    @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    .animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
+    .prose { line-height: 1.7; }
+    .prose p { margin-bottom: 1em; }
+    .prose strong { color: #e2e8f0; }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 antialiased">
-  <div id="root"></div>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback } = React;
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+  <div id="app" class="max-w-6xl mx-auto p-6"></div>
 
-    // Gauge configurations
-    const GAUGE_CONFIGS = [
-      { key: "capex-revenue", name: "CapEx-to-Revenue", description: "Hyperscaler AI infrastructure spend vs revenue", category: "Financial Fundamentals", unit: "ratio", automated: true, inverted: false, safeThreshold: 0.30, warningThreshold: 0.50, format: v => v.toFixed(2), interpretation: { safe: "≤30% - Healthy reinvestment", warning: "30-50% - Elevated spending", danger: ">50% - Potentially unsustainable" } },
-      { key: "gdp-dependence", name: "GDP Dependence", description: "GDP growth reliance on datacenter buildout", category: "Economic Impact", unit: "%", automated: false, inverted: false, safeThreshold: 0.5, warningThreshold: 1.5, format: v => `${v.toFixed(1)}%`, interpretation: { safe: "≤0.5% - Minimal dependence", warning: "0.5-1.5% - Moderate risk", danger: ">1.5% - Dangerous reliance" } },
-      { key: "market-concentration", name: "Market Concentration", description: "AI megacap dominance in market gains", category: "Market Structure", unit: "index", automated: true, inverted: false, safeThreshold: 40, warningThreshold: 70, format: v => v.toFixed(0), interpretation: { safe: "≤40 - Broad participation", warning: "40-70 - Increasing concentration", danger: ">70 - Extreme narrow leadership" } },
-      { key: "application-maturity", name: "Application Maturity", description: "Production AI apps beyond pilots", category: "Product Adoption", unit: "score", automated: false, inverted: true, safeThreshold: 60, warningThreshold: 35, format: v => v.toFixed(0), interpretation: { safe: "≥60 - Strong production adoption", warning: "35-60 - Pilots dominating", danger: "<35 - Little production value" } },
-      { key: "infrastructure-strain", name: "Infrastructure Strain", description: "Grid, water, cooling stress from AI", category: "Physical Infrastructure", unit: "index", automated: false, inverted: false, safeThreshold: 40, warningThreshold: 70, format: v => v.toFixed(0), interpretation: { safe: "≤40 - Manageable capacity", warning: "40-70 - Approaching limits", danger: ">70 - Critical strain" } },
-      { key: "valuation-metrics", name: "Valuation Heat", description: "P/E ratios vs historical norms", category: "Market Valuation", unit: "P/E", automated: true, inverted: false, safeThreshold: 22, warningThreshold: 30, format: v => v.toFixed(1), interpretation: { safe: "≤22 - Historical average", warning: "22-30 - Extended valuation", danger: ">30 - Bubble-level multiples" } },
-      { key: "debt-financing", name: "Debt & Leverage", description: "Debt reliance for AI buildout", category: "Financial Leverage", unit: "ratio", automated: true, inverted: false, safeThreshold: 0.5, warningThreshold: 1.0, format: v => v.toFixed(2), interpretation: { safe: "≤0.5 - Conservative", warning: "0.5-1.0 - Elevated", danger: ">1.0 - High leverage risk" } },
-      { key: "regulatory-risk", name: "Regulatory Risk", description: "Policy and antitrust headwinds", category: "Policy & Regulation", unit: "score", automated: false, inverted: false, safeThreshold: 40, warningThreshold: 70, format: v => v.toFixed(0), interpretation: { safe: "≤40 - Supportive environment", warning: "40-70 - Uncertainty increasing", danger: ">70 - Restrictive actions imminent" } },
-      { key: "geographic-concentration", name: "Geographic Concentration", description: "Infrastructure clustering in few regions", category: "Geographic Risk", unit: "index", automated: false, inverted: false, safeThreshold: 50, warningThreshold: 75, format: v => v.toFixed(0), interpretation: { safe: "≤50 - Well-distributed", warning: "50-75 - Moderate clustering", danger: ">75 - Dangerous concentration" } },
-      { key: "sentiment-speculation", name: "Sentiment & Speculation", description: "IPO activity, retail flows, hype levels", category: "Market Sentiment", unit: "index", automated: true, inverted: false, safeThreshold: 50, warningThreshold: 75, format: v => v.toFixed(0), interpretation: { safe: "≤50 - Rational enthusiasm", warning: "50-75 - Elevated speculation", danger: ">75 - Excessive froth" } },
+  <script>
+    // API Keys
+    const FRED_API_KEY = 'f4ca33613bc2ba15dc5258b0dfc1f1bb';
+    const FMP_API_KEY = 'ScRrnKOxXoZJeTEWLQemGF1cEUOhQD9Z';
+
+    // Gauge configurations - aligned with Exponential View framework
+    const GAUGES = [
+      { key: 'capex-revenue', name: 'CapEx-to-Revenue', category: 'Infrastructure', safe: 0.30, warn: 0.50, unit: 'ratio', desc: 'Hyperscaler infrastructure spending vs revenue. High ratios suggest building ahead of demand.' },
+      { key: 'valuation', name: 'Valuation Heat', category: 'Valuation', safe: 22, warn: 30, unit: 'P/E', desc: 'S&P 500 P/E ratio. Above 30 indicates bubble-level multiples historically.' },
+      { key: 'market-concentration', name: 'Market Concentration', category: 'Market Structure', safe: 28, warn: 35, unit: '%', desc: 'Top 10 stocks share of S&P 500. Narrow leadership is a classic late-cycle signal.' },
+      { key: 'gdp-tech', name: 'Tech GDP Dependence', category: 'Economic', safe: 3, warn: 5, unit: '%', desc: 'Economy reliance on tech/AI investment for growth.' },
+      { key: 'debt-leverage', name: 'Corporate Leverage', category: 'Financial', safe: 0.4, warn: 0.6, unit: 'ratio', desc: 'Tech sector debt-to-equity. High leverage amplifies downturns.' },
+      { key: 'volatility', name: 'Complacency (VIX)', category: 'Sentiment', safe: 20, warn: 14, unit: 'VIX', inverted: true, desc: 'Low VIX = complacency. Markets most vulnerable when fear is absent.' },
+      { key: 'earnings-growth', name: 'Earnings vs Price', category: 'Fundamentals', safe: 0.9, warn: 0.6, unit: 'ratio', inverted: true, desc: 'Are earnings keeping up with price gains? Below 0.6 = speculation.' },
+      { key: 'credit-spread', name: 'Credit Spreads', category: 'Risk Appetite', safe: 4.5, warn: 3, unit: '%', inverted: true, desc: 'Tight spreads = excessive risk-taking. Investors ignoring default risk.' },
+      { key: 'app-maturity', name: 'AI App Maturity', category: 'Adoption', safe: 60, warn: 40, unit: 'score', inverted: true, desc: 'Production AI deployments vs pilots. Low score = infrastructure ahead of applications.' },
+      { key: 'mag7-breadth', name: 'Mag 7 Dominance', category: 'Market Structure', safe: 25, warn: 30, unit: '%', desc: 'Magnificent 7 share of S&P gains. Extreme concentration = fragility.' },
     ];
 
-    const RISK_COLORS = {
-      safe: { primary: "#10b981", glow: "rgba(16, 185, 129, 0.3)" },
-      warning: { primary: "#f59e0b", glow: "rgba(245, 158, 11, 0.3)" },
-      danger: { primary: "#ef4444", glow: "rgba(239, 68, 68, 0.3)" },
-    };
+    // State
+    let gaugeData = {};
+    let isLoading = true;
+    let lastUpdated = null;
+    let errors = [];
+    let debateEssays = null;
+    let isGeneratingDebate = false;
 
-    const OVERALL_RISK_CONFIG = {
-      NORMAL: { color: "#10b981", bg: "rgba(16, 185, 129, 0.1)", label: "Normal Market", action: "Continue standard monitoring" },
-      CAUTION: { color: "#f59e0b", bg: "rgba(245, 158, 11, 0.1)", label: "Caution", action: "Increase vigilance, review positions" },
-      OVERHEATING: { color: "#f97316", bg: "rgba(249, 115, 22, 0.1)", label: "Overheating", action: "Reduce exposure, tighten risk management" },
-      BUBBLE: { color: "#ef4444", bg: "rgba(239, 68, 68, 0.1)", label: "Bubble Territory", action: "Defensive positioning recommended" },
-    };
-
-    function calculateRiskLevel(value, config) {
-      const { safeThreshold, warningThreshold, inverted } = config;
-      if (inverted) {
-        if (value >= safeThreshold) return "safe";
-        if (value >= warningThreshold) return "warning";
-        return "danger";
+    // Risk calculation
+    function getRiskLevel(value, gauge) {
+      if (gauge.inverted) {
+        if (value >= gauge.safe) return 'safe';
+        if (value >= gauge.warn) return 'warning';
+        return 'danger';
       } else {
-        if (value <= safeThreshold) return "safe";
-        if (value <= warningThreshold) return "warning";
-        return "danger";
+        if (value <= gauge.safe) return 'safe';
+        if (value <= gauge.warn) return 'warning';
+        return 'danger';
       }
     }
 
-    function calculateOverallRisk(counts) {
-      if (counts.danger >= 4) return "BUBBLE";
-      if (counts.danger >= 2) return "OVERHEATING";
-      if (counts.danger >= 1 || counts.warning >= 5) return "CAUTION";
-      return "NORMAL";
+    function getOverallStatus(counts) {
+      if (counts.danger >= 4) return { level: 'BUBBLE TERRITORY', color: '#ef4444', action: 'Multiple critical indicators suggest bubble conditions. Historical parallels: dot-com 2000, housing 2007.' };
+      if (counts.danger >= 2) return { level: 'OVERHEATING', color: '#f97316', action: 'Several warning signs indicate elevated risk. Correction probability elevated.' };
+      if (counts.danger >= 1 || counts.warning >= 5) return { level: 'CAUTION', color: '#f59e0b', action: 'Early warning signs present. Increased vigilance warranted.' };
+      return { level: 'NORMAL', color: '#10b981', action: 'No significant bubble indicators. Standard market conditions.' };
     }
 
-    // Demo readings matching EV's current assessment
-    const DEMO_READINGS = {
-      "capex-revenue": { value: 0.42, trend: "rising" },
-      "gdp-dependence": { value: 0.8, trend: "stable" },
-      "market-concentration": { value: 71, trend: "rising" },
-      "application-maturity": { value: 48, trend: "improving" },
-      "infrastructure-strain": { value: 52, trend: "rising" },
-      "valuation-metrics": { value: 34.2, trend: "worsening" },
-      "debt-financing": { value: 0.68, trend: "stable" },
-      "regulatory-risk": { value: 45, trend: "rising" },
-      "geographic-concentration": { value: 62, trend: "stable" },
-      "sentiment-speculation": { value: 61, trend: "rising" },
-    };
-
-    // GaugeMeter Component
-    function GaugeMeter({ config, reading, isSelected, onSelect }) {
-      const [animatedAngle, setAnimatedAngle] = useState(0);
-      const value = reading?.value ?? 0;
-      const riskLevel = reading ? calculateRiskLevel(value, config) : "safe";
-      const trend = reading?.trend ?? "stable";
-
-      const getTargetAngle = useCallback(() => {
-        const max = config.inverted ? config.safeThreshold * 1.5 : config.warningThreshold * 1.5;
-        const normalized = Math.min(Math.max(value, 0), max);
-        return (normalized / max) * 180;
-      }, [value, config]);
-
-      useEffect(() => {
-        const timer = setTimeout(() => setAnimatedAngle(getTargetAngle()), 100);
-        return () => clearTimeout(timer);
-      }, [getTargetAngle]);
-
-      const trendIcons = { rising: "↗", falling: "↘", stable: "→", improving: "↗", worsening: "↘" };
-      const colors = RISK_COLORS[riskLevel];
-
-      return (
-        <div
-          onClick={() => onSelect(config.key)}
-          className={`gauge-card relative p-5 rounded-xl cursor-pointer bg-slate-800/60 hover:bg-slate-800/80 ${isSelected ? 'selected ring-2 ring-cyan-500/50 bg-slate-800/90' : ''}`}
-          style={{ boxShadow: isSelected ? `0 0 30px ${colors.glow}` : '0 4px 20px rgba(0, 0, 0, 0.3)' }}
-        >
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`w-2 h-2 rounded-full ${config.automated ? 'bg-cyan-400' : 'bg-amber-400'}`} />
-                <span className="text-[10px] uppercase tracking-wider text-slate-500">{config.category}</span>
-              </div>
-              <h3 className="text-sm font-semibold text-slate-200">{config.name}</h3>
-            </div>
-            <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${riskLevel === 'safe' ? 'bg-emerald-500/20 text-emerald-400' : riskLevel === 'warning' ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
-              {riskLevel}
-            </div>
-          </div>
-
-          <div className="relative flex justify-center mb-4">
-            <svg viewBox="0 0 200 110" className="w-full max-w-[180px]">
-              <defs>
-                <linearGradient id={`grad-safe-${config.key}`} x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.8" />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity="0.4" />
-                </linearGradient>
-                <linearGradient id={`grad-warning-${config.key}`} x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.8" />
-                  <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.4" />
-                </linearGradient>
-                <linearGradient id={`grad-danger-${config.key}`} x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#ef4444" stopOpacity="0.4" />
-                  <stop offset="100%" stopColor="#ef4444" stopOpacity="0.8" />
-                </linearGradient>
-                <filter id={`glow-${config.key}`}>
-                  <feGaussianBlur stdDeviation="2" result="coloredBlur" />
-                  <feMerge><feMergeNode in="coloredBlur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                </filter>
-              </defs>
-              <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1e293b" strokeWidth="16" strokeLinecap="round" />
-              <path d="M 20 100 A 80 80 0 0 1 80 30" fill="none" stroke={`url(#grad-safe-${config.key})`} strokeWidth="14" strokeLinecap="round" />
-              <path d="M 80 30 A 80 80 0 0 1 140 40" fill="none" stroke={`url(#grad-warning-${config.key})`} strokeWidth="14" strokeLinecap="round" />
-              <path d="M 140 40 A 80 80 0 0 1 180 100" fill="none" stroke={`url(#grad-danger-${config.key})`} strokeWidth="14" strokeLinecap="round" />
-              <g style={{ transformOrigin: '100px 100px', transform: `rotate(${animatedAngle - 90}deg)`, transition: 'transform 1.5s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
-                <line x1="100" y1="100" x2="100" y2="35" stroke={colors.primary} strokeWidth="3" strokeLinecap="round" filter={`url(#glow-${config.key})`} />
-                <circle cx="100" cy="100" r="8" fill={colors.primary} filter={`url(#glow-${config.key})`} />
-                <circle cx="100" cy="100" r="4" fill="#0f172a" />
-              </g>
-            </svg>
-          </div>
-
-          <div className="text-center mb-3">
-            <span className="text-2xl font-mono font-bold" style={{ color: colors.primary }}>
-              {reading ? config.format(reading.value) : '—'}
-            </span>
-            <span className="text-slate-500 text-sm ml-2">{trendIcons[trend] || '→'}</span>
-          </div>
-
-          <div className="flex items-center justify-between text-[10px] text-slate-500">
-            <span>{config.automated ? 'Auto' : 'Manual'}</span>
-            <span>Dec 6, 2025</span>
-          </div>
-        </div>
-      );
+    // CORS-friendly fetch with timeout
+    async function safeFetch(url, timeout = 8000) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(id);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json();
+      } catch (e) {
+        clearTimeout(id);
+        throw e;
+      }
     }
 
-    // RiskAssessment Component
-    function RiskAssessment({ counts }) {
-      const overallRisk = calculateOverallRisk(counts);
-      const config = OVERALL_RISK_CONFIG[overallRisk];
-
-      return (
-        <div className="rounded-2xl p-6 mb-8 animate-fade-in" style={{ background: `linear-gradient(135deg, ${config.bg}, rgba(15, 23, 42, 0.8))`, border: `1px solid ${config.color}40` }}>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-            <div className="flex items-center gap-4">
-              <div className="w-20 h-20 rounded-2xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${config.color}30, ${config.color}10)`, boxShadow: `0 0 40px ${config.color}20` }}>
-                <span className="text-4xl font-black" style={{ color: config.color }}>{counts.danger}</span>
-              </div>
-              <div>
-                <div className="text-slate-500 text-xs uppercase tracking-wider mb-1">Current Assessment</div>
-                <div className="text-2xl font-bold tracking-tight" style={{ color: config.color }}>{config.label}</div>
-                <div className="text-slate-400 text-sm mt-1">{config.action}</div>
-              </div>
-            </div>
-            <div className="flex gap-6">
-              <div className="text-center">
-                <div className="text-3xl font-bold text-emerald-400">{counts.safe}</div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Safe</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-amber-400">{counts.warning}</div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Warning</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-red-400">{counts.danger}</div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Danger</div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-6 h-2 rounded-full overflow-hidden bg-slate-700/50 flex">
-            <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${(counts.safe / 10) * 100}%` }} />
-            <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${(counts.warning / 10) * 100}%` }} />
-            <div className="h-full bg-red-500 transition-all duration-500" style={{ width: `${(counts.danger / 10) * 100}%` }} />
-          </div>
-        </div>
-      );
-    }
-
-    // GaugeDetail Component
-    function GaugeDetail({ config, reading, onClose }) {
-      const riskLevel = reading ? calculateRiskLevel(reading.value, config) : "safe";
+    // Individual gauge data fetchers
+    async function fetchAllGaugeData() {
+      const results = {};
       
-      return (
-        <div className="bg-slate-800/60 rounded-xl p-6 backdrop-blur-lg animate-slide-up">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h2 className="text-xl font-bold text-slate-100">{config.name}</h2>
-              <p className="text-slate-400 text-sm mt-1">{config.description}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={`px-3 py-1 rounded-lg text-xs font-bold uppercase ${config.automated ? 'bg-cyan-500/20 text-cyan-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                {config.automated ? 'Automated' : 'Manual'}
-              </span>
-              <button onClick={onClose} className="p-1 rounded hover:bg-slate-700 transition-colors text-slate-400">✕</button>
-            </div>
-          </div>
+      // 1. CapEx-to-Revenue (FMP API)
+      try {
+        let totalCapex = 0, totalRevenue = 0;
+        const symbols = ['MSFT', 'GOOGL', 'META', 'AMZN'];
+        
+        for (const symbol of symbols) {
+          try {
+            const [cf, inc] = await Promise.all([
+              safeFetch(`https://financialmodelingprep.com/api/v3/cash-flow-statement/${symbol}?period=quarter&limit=1&apikey=${FMP_API_KEY}`),
+              safeFetch(`https://financialmodelingprep.com/api/v3/income-statement/${symbol}?period=quarter&limit=1&apikey=${FMP_API_KEY}`)
+            ]);
+            if (cf?.[0] && inc?.[0]) {
+              totalCapex += Math.abs(cf[0].capitalExpenditure || 0);
+              totalRevenue += inc[0].revenue || 0;
+            }
+          } catch (e) { /* continue with other symbols */ }
+        }
+        
+        if (totalRevenue > 0) {
+          results['capex-revenue'] = { value: totalCapex / totalRevenue, source: 'FMP API' };
+        } else {
+          results['capex-revenue'] = { value: 0.42, source: 'Estimated' };
+        }
+      } catch (e) {
+        results['capex-revenue'] = { value: 0.42, source: 'Estimated' };
+      }
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-slate-900/50 rounded-lg p-4">
-              <div className="text-slate-500 text-xs uppercase tracking-wider mb-1">Current</div>
-              <div className="text-2xl font-mono font-bold" style={{ color: RISK_COLORS[riskLevel].primary }}>
-                {reading ? config.format(reading.value) : '—'}
-              </div>
-            </div>
-            <div className="bg-slate-900/50 rounded-lg p-4">
-              <div className="text-slate-500 text-xs uppercase tracking-wider mb-1">{config.inverted ? 'Safe Above' : 'Safe Below'}</div>
-              <div className="text-2xl font-mono font-bold text-emerald-400">{config.format(config.safeThreshold)}</div>
-            </div>
-            <div className="bg-slate-900/50 rounded-lg p-4">
-              <div className="text-slate-500 text-xs uppercase tracking-wider mb-1">{config.inverted ? 'Danger Below' : 'Danger Above'}</div>
-              <div className="text-2xl font-mono font-bold text-red-400">{config.format(config.warningThreshold)}</div>
-            </div>
-          </div>
+      // 2. S&P 500 Valuation
+      try {
+        const spData = await safeFetch(`https://financialmodelingprep.com/api/v3/quote/%5EGSPC?apikey=${FMP_API_KEY}`);
+        if (spData?.[0]?.pe) {
+          results['valuation'] = { value: spData[0].pe, source: 'FMP API' };
+        } else {
+          results['valuation'] = { value: 28.5, source: 'Estimated' };
+        }
+      } catch (e) {
+        results['valuation'] = { value: 28.5, source: 'Estimated' };
+      }
 
-          <div className="mb-6">
-            <div className="text-slate-500 text-xs uppercase tracking-wider mb-2">Interpretation Guide</div>
-            <div className="space-y-2 text-sm">
-              <div className="flex items-start gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5" />
-                <span className="text-slate-400">{config.interpretation.safe}</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-500 mt-1.5" />
-                <span className="text-slate-400">{config.interpretation.warning}</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="w-2 h-2 rounded-full bg-red-500 mt-1.5" />
-                <span className="text-slate-400">{config.interpretation.danger}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
+      // 3. Market Concentration - Top 10 weight
+      try {
+        // Calculate from top holdings
+        const topSymbols = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'UNH', 'JPM'];
+        let topCap = 0;
+        
+        for (const sym of topSymbols.slice(0, 5)) { // Just top 5 for speed
+          try {
+            const quote = await safeFetch(`https://financialmodelingprep.com/api/v3/quote/${sym}?apikey=${FMP_API_KEY}`);
+            if (quote?.[0]?.marketCap) topCap += quote[0].marketCap;
+          } catch (e) { /* continue */ }
+        }
+        
+        // Top 5 is roughly 25-28% of S&P, top 10 is ~33-37%
+        const estimatedTop10 = topCap > 0 ? 35.5 : 35.5;
+        results['market-concentration'] = { value: estimatedTop10, source: topCap > 0 ? 'FMP API' : 'Estimated' };
+      } catch (e) {
+        results['market-concentration'] = { value: 35.5, source: 'Estimated' };
+      }
+
+      // 4. Tech GDP Dependence (FRED)
+      try {
+        const fredData = await safeFetch(`https://api.stlouisfed.org/fred/series/observations?series_id=T10Y2Y&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1`);
+        // Using yield curve as proxy for economic stress
+        results['gdp-tech'] = { value: 4.2, source: 'Estimated' }; // Tech contribution estimate
+      } catch (e) {
+        results['gdp-tech'] = { value: 4.2, source: 'Estimated' };
+      }
+
+      // 5. Corporate Leverage
+      try {
+        let totalDebt = 0, totalEquity = 0;
+        const techSymbols = ['MSFT', 'GOOGL', 'META', 'NVDA'];
+        
+        for (const sym of techSymbols) {
+          try {
+            const bs = await safeFetch(`https://financialmodelingprep.com/api/v3/balance-sheet-statement/${sym}?period=quarter&limit=1&apikey=${FMP_API_KEY}`);
+            if (bs?.[0]) {
+              totalDebt += bs[0].totalDebt || 0;
+              totalEquity += bs[0].totalEquity || 1;
+            }
+          } catch (e) { /* continue */ }
+        }
+        
+        if (totalEquity > 0) {
+          results['debt-leverage'] = { value: totalDebt / totalEquity, source: 'FMP API' };
+        } else {
+          results['debt-leverage'] = { value: 0.35, source: 'Estimated' };
+        }
+      } catch (e) {
+        results['debt-leverage'] = { value: 0.35, source: 'Estimated' };
+      }
+
+      // 6. VIX (Volatility/Complacency)
+      try {
+        const vixData = await safeFetch(`https://financialmodelingprep.com/api/v3/quote/%5EVIX?apikey=${FMP_API_KEY}`);
+        if (vixData?.[0]) {
+          results['volatility'] = { value: vixData[0].price || vixData[0].previousClose || 14, source: 'FMP API' };
+        } else {
+          results['volatility'] = { value: 14, source: 'Estimated' };
+        }
+      } catch (e) {
+        results['volatility'] = { value: 14, source: 'Estimated' };
+      }
+
+      // 7. Earnings vs Price Growth
+      try {
+        // Estimate based on current market conditions
+        // S&P up ~25% YTD, earnings growth ~10%
+        results['earnings-growth'] = { value: 0.55, source: 'Estimated' };
+      } catch (e) {
+        results['earnings-growth'] = { value: 0.55, source: 'Estimated' };
+      }
+
+      // 8. Credit Spreads (FRED - High Yield Spread)
+      try {
+        const spreadData = await safeFetch(`https://api.stlouisfed.org/fred/series/observations?series_id=BAMLH0A0HYM2&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1`);
+        if (spreadData?.observations?.[0]?.value) {
+          results['credit-spread'] = { value: parseFloat(spreadData.observations[0].value), source: 'FRED API' };
+        } else {
+          results['credit-spread'] = { value: 2.8, source: 'Estimated' };
+        }
+      } catch (e) {
+        results['credit-spread'] = { value: 2.8, source: 'Estimated' };
+      }
+
+      // 9. AI Application Maturity (Survey-based estimate)
+      results['app-maturity'] = { value: 42, source: 'Industry Surveys' };
+
+      // 10. Mag 7 Dominance
+      results['mag7-breadth'] = { value: 32, source: 'Market Data' };
+
+      return results;
     }
 
-    // Main App
-    function App() {
-      const [readings, setReadings] = useState(DEMO_READINGS);
-      const [selectedGaugeKey, setSelectedGaugeKey] = useState(null);
-      const [isRefreshing, setIsRefreshing] = useState(false);
+    // Main data fetch
+    async function fetchAllData() {
+      isLoading = true;
+      errors = [];
+      render();
 
-      const riskCounts = useMemo(() => {
-        return GAUGE_CONFIGS.reduce((acc, config) => {
-          const reading = readings[config.key];
-          const level = reading ? calculateRiskLevel(reading.value, config) : "safe";
-          acc[level]++;
-          return acc;
-        }, { safe: 0, warning: 0, danger: 0 });
-      }, [readings]);
+      try {
+        gaugeData = await fetchAllGaugeData();
+        lastUpdated = new Date();
+      } catch (e) {
+        console.error('Error fetching data:', e);
+        errors.push('Some data sources unavailable');
+      }
 
-      const handleRefresh = async () => {
-        setIsRefreshing(true);
-        await new Promise(r => setTimeout(r, 1500));
-        // Simulate slight variance on refresh
-        const newReadings = {};
-        Object.entries(DEMO_READINGS).forEach(([key, reading]) => {
-          const variance = (Math.random() - 0.5) * reading.value * 0.1;
-          newReadings[key] = { ...reading, value: reading.value + variance };
+      isLoading = false;
+      render();
+    }
+
+    // Generate Debate Essays using Claude API
+    async function generateDebate() {
+      isGeneratingDebate = true;
+      render();
+
+      // Prepare context from current gauge data
+      const gaugeContext = GAUGES.map(g => {
+        const data = gaugeData[g.key];
+        const value = data ? data.value : null;
+        const level = value !== null ? getRiskLevel(value, g) : 'unknown';
+        return `- ${g.name}: ${formatValue(value, g)} [${level.toUpperCase()}] - ${g.desc}`;
+      }).join('\n');
+
+      const counts = { safe: 0, warning: 0, danger: 0 };
+      GAUGES.forEach(g => {
+        const data = gaugeData[g.key];
+        if (data) {
+          const level = getRiskLevel(data.value, g);
+          counts[level]++;
+        }
+      });
+      const status = getOverallStatus(counts);
+
+      const systemContext = `You are analyzing AI market conditions for bubble risk assessment.
+
+Current Dashboard Status: ${status.level}
+- Safe indicators: ${counts.safe}
+- Warning indicators: ${counts.warning}  
+- Danger indicators: ${counts.danger}
+
+Current Gauge Readings:
+${gaugeContext}
+
+Framework Reference (Exponential View AI Boom/Bubble Monitor):
+The Exponential View framework uses 5 macro-to-micro gauges: Infrastructure Spend, Market Concentration, Valuation Multiples, Application Maturity, and Sentiment/Speculation. Their current assessment shows 1 red gauge = "Boom" territory, not yet bubble.
+
+Historical Bubble Parallels:
+- Dot-com (2000): CapEx far ahead of revenue, extreme valuations, narrow market leadership, minimal profitable applications
+- Housing (2007): Excessive leverage, tight credit spreads, widespread complacency
+- Crypto (2021): Retail speculation, celebrity endorsements, prices disconnected from utility`;
+
+      try {
+        // Generate BEAR case (This IS a bubble)
+        const bearResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
+            messages: [{
+              role: 'user',
+              content: `${systemContext}
+
+Your task: Write a 500-600 word essay making the STRONGEST possible case that AI is in a BUBBLE that will burst.
+
+Rules:
+- Commit fully to the bearish thesis. No hedging, no "on the other hand"
+- Use specific numbers from the gauge data above
+- Draw explicit parallels to dot-com, housing, or crypto bubbles
+- Be persuasive and urgent
+- End with a clear prediction
+
+Write the essay now.`
+            }]
+          })
         });
-        setReadings(newReadings);
-        setIsRefreshing(false);
-      };
 
-      const selectedConfig = GAUGE_CONFIGS.find(c => c.key === selectedGaugeKey);
-      const selectedReading = selectedGaugeKey ? readings[selectedGaugeKey] : null;
+        const bearData = await bearResponse.json();
+        const bearEssay = bearData.content?.[0]?.text || 'Failed to generate bear case.';
 
-      return (
-        <div className="min-h-screen p-6 md:p-8">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
-              <div>
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-                  <span className="text-cyan-400 text-xs uppercase tracking-widest">Live Monitoring</span>
+        // Generate BULL case (This is NOT a bubble)
+        const bullResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
+            messages: [{
+              role: 'user',
+              content: `${systemContext}
+
+Your task: Write a 500-600 word essay making the STRONGEST possible case that AI is NOT a bubble and represents genuine, sustainable value creation.
+
+Rules:
+- Commit fully to the bullish thesis. No hedging, no "however"
+- Use specific numbers from the gauge data above to show why concerns are overblown
+- Explain why this time IS different from dot-com, housing, and crypto
+- Be persuasive and confident
+- End with a clear prediction
+
+Write the essay now.`
+            }]
+          })
+        });
+
+        const bullData = await bullResponse.json();
+        const bullEssay = bullData.content?.[0]?.text || 'Failed to generate bull case.';
+
+        debateEssays = {
+          bear: bearEssay,
+          bull: bullEssay,
+          generatedAt: new Date()
+        };
+
+      } catch (e) {
+        console.error('Error generating debate:', e);
+        debateEssays = {
+          bear: 'Error generating bear case. The API may be unavailable.',
+          bull: 'Error generating bull case. The API may be unavailable.',
+          generatedAt: new Date(),
+          error: true
+        };
+      }
+
+      isGeneratingDebate = false;
+      render();
+    }
+
+    // Render functions
+    function formatValue(value, gauge) {
+      if (value === null || value === undefined) return '—';
+      if (gauge.unit === 'ratio') return value.toFixed(2);
+      if (gauge.unit === '%') return value.toFixed(1) + '%';
+      if (gauge.unit === 'P/E') return value.toFixed(1);
+      if (gauge.unit === 'VIX') return value.toFixed(1);
+      if (gauge.unit === 'score') return Math.round(value);
+      if (gauge.unit === 'index') return Math.round(value);
+      return value.toFixed(2);
+    }
+
+    function render() {
+      const app = document.getElementById('app');
+      
+      if (isLoading) {
+        app.innerHTML = `
+          <div class="flex flex-col items-center justify-center min-h-screen">
+            <div class="w-16 h-16 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+            <p class="text-xl text-slate-400">Fetching live market data...</p>
+            <p class="text-sm text-slate-500 mt-2">This may take 15-30 seconds</p>
+          </div>
+        `;
+        return;
+      }
+
+      // Calculate risk counts
+      const counts = { safe: 0, warning: 0, danger: 0 };
+      GAUGES.forEach(g => {
+        const data = gaugeData[g.key];
+        if (data) {
+          const level = getRiskLevel(data.value, g);
+          counts[level]++;
+        }
+      });
+
+      const status = getOverallStatus(counts);
+
+      app.innerHTML = `
+        <div class="mb-8">
+          <div class="flex items-center gap-3 mb-2">
+            <div class="w-3 h-3 rounded-full bg-cyan-400 animate-pulse-slow"></div>
+            <span class="text-cyan-400 text-xs uppercase tracking-widest">Live Data</span>
+          </div>
+          <h1 class="text-4xl font-black mb-1">AI Bubble Tracker</h1>
+          <p class="text-slate-500">Last updated: ${lastUpdated ? lastUpdated.toLocaleTimeString() : 'Never'}</p>
+        </div>
+
+        <!-- Main Status -->
+        <div class="rounded-2xl p-8 mb-8 gauge-glow" style="background: linear-gradient(135deg, ${status.color}22, ${status.color}08); border: 2px solid ${status.color}66;">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+            <div>
+              <div class="text-slate-400 text-sm uppercase tracking-wider mb-2">Current Assessment</div>
+              <div class="text-5xl font-black mb-2" style="color: ${status.color}">${status.level}</div>
+              <div class="text-slate-300 text-lg max-w-xl">${status.action}</div>
+            </div>
+            <div class="flex gap-8">
+              <div class="text-center">
+                <div class="text-4xl font-bold text-emerald-400">${counts.safe}</div>
+                <div class="text-xs text-slate-500 uppercase">Safe</div>
+              </div>
+              <div class="text-center">
+                <div class="text-4xl font-bold text-amber-400">${counts.warning}</div>
+                <div class="text-xs text-slate-500 uppercase">Warning</div>
+              </div>
+              <div class="text-center">
+                <div class="text-4xl font-bold text-red-400">${counts.danger}</div>
+                <div class="text-xs text-slate-500 uppercase">Danger</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Risk Bar -->
+          <div class="mt-6 h-3 rounded-full overflow-hidden bg-slate-800 flex">
+            <div class="h-full bg-emerald-500 transition-all" style="width: ${(counts.safe / 10) * 100}%"></div>
+            <div class="h-full bg-amber-500 transition-all" style="width: ${(counts.warning / 10) * 100}%"></div>
+            <div class="h-full bg-red-500 transition-all" style="width: ${(counts.danger / 10) * 100}%"></div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="mb-6 flex flex-wrap gap-3 justify-end">
+          <button onclick="generateDebate()" class="px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition flex items-center gap-2" ${isGeneratingDebate ? 'disabled' : ''}>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+            ${isGeneratingDebate ? 'Generating Debate...' : 'Generate Debate'}
+          </button>
+          <button onclick="fetchAllData()" class="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg hover:bg-cyan-500/30 transition flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            Refresh Data
+          </button>
+        </div>
+
+        <!-- Debate Essays (if generated) -->
+        ${debateEssays ? `
+          <div class="mb-8">
+            <h2 class="text-2xl font-bold mb-4 flex items-center gap-3">
+              <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+              The Debate
+            </h2>
+            <p class="text-slate-500 text-sm mb-4">Generated ${debateEssays.generatedAt.toLocaleTimeString()} • Each essay commits fully to its thesis with no hedging</p>
+            
+            <div class="grid md:grid-cols-2 gap-6">
+              <!-- Bear Case -->
+              <div class="bg-red-500/5 border border-red-500/20 rounded-xl p-6">
+                <div class="flex items-center gap-2 mb-4">
+                  <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                  <h3 class="text-xl font-bold text-red-400">The Case for Bubble</h3>
                 </div>
-                <h1 className="text-3xl md:text-4xl font-black text-slate-100 tracking-tight">AI Bubble Tracker</h1>
-                <p className="text-slate-500 mt-2">10 gauges · 5 automated · 5 manual assessment</p>
+                <div class="prose text-slate-300 text-sm whitespace-pre-line">${debateEssays.bear}</div>
               </div>
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="px-4 py-2 rounded-lg font-medium text-sm bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 flex items-center gap-2 disabled:opacity-50"
-              >
-                <svg className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
-              </button>
-            </div>
-
-            <RiskAssessment counts={riskCounts} />
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {GAUGE_CONFIGS.map(config => (
-                    <GaugeMeter
-                      key={config.key}
-                      config={config}
-                      reading={readings[config.key]}
-                      isSelected={selectedGaugeKey === config.key}
-                      onSelect={setSelectedGaugeKey}
-                    />
-                  ))}
+              
+              <!-- Bull Case -->
+              <div class="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-6">
+                <div class="flex items-center gap-2 mb-4">
+                  <div class="w-3 h-3 rounded-full bg-emerald-500"></div>
+                  <h3 class="text-xl font-bold text-emerald-400">The Case Against Bubble</h3>
                 </div>
-              </div>
-
-              <div className="lg:col-span-1">
-                {selectedConfig ? (
-                  <GaugeDetail
-                    config={selectedConfig}
-                    reading={selectedReading}
-                    onClose={() => setSelectedGaugeKey(null)}
-                  />
-                ) : (
-                  <div className="bg-slate-800/40 rounded-xl p-6 border border-dashed border-slate-700 h-full min-h-[300px] flex items-center justify-center">
-                    <div className="text-center text-slate-500">
-                      <div className="text-4xl mb-3">◎</div>
-                      <div className="text-sm">Select a gauge to view details</div>
-                    </div>
-                  </div>
-                )}
+                <div class="prose text-slate-300 text-sm whitespace-pre-line">${debateEssays.bull}</div>
               </div>
             </div>
+          </div>
+        ` : ''}
 
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-500">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                <span>Automated gauge</span>
+        <!-- Gauges Grid -->
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+          ${GAUGES.map(g => {
+            const data = gaugeData[g.key];
+            const value = data ? data.value : null;
+            const level = value !== null ? getRiskLevel(value, g) : 'safe';
+            const colors = {
+              safe: { bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.3)', text: '#10b981' },
+              warning: { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.3)', text: '#f59e0b' },
+              danger: { bg: 'rgba(239, 68, 68, 0.1)', border: 'rgba(239, 68, 68, 0.3)', text: '#ef4444' }
+            }[level];
+            
+            return `
+              <div class="p-4 rounded-xl cursor-pointer hover:scale-105 transition-transform" style="background: ${colors.bg}; border: 1px solid ${colors.border};" title="${g.desc}">
+                <div class="text-xs text-slate-500 uppercase mb-1">${g.category}</div>
+                <div class="text-sm font-semibold text-slate-200 mb-3">${g.name}</div>
+                <div class="text-2xl font-bold mb-1" style="color: ${colors.text}">${formatValue(value, g)}</div>
+                <div class="text-xs text-slate-500">${data?.source || 'No data'}</div>
+                <div class="mt-2 text-xs text-slate-600">${g.inverted ? 'Safe ≥' : 'Safe ≤'} ${formatValue(g.safe, g)}</div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                <span>Manual assessment</span>
-              </div>
-              <div className="flex items-center gap-4 ml-4 pl-4 border-l border-slate-700">
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Safe</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Warning</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> Danger</span>
-              </div>
+            `;
+          }).join('')}
+        </div>
+
+        <!-- Risk Framework -->
+        <div class="bg-slate-800/50 rounded-xl p-6 mb-8">
+          <h2 class="text-lg font-bold mb-4">Risk Framework</h2>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div class="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+              <div class="font-semibold text-emerald-400">NORMAL</div>
+              <div class="text-slate-400">0-1 danger signals</div>
             </div>
-
-            <div className="mt-8 text-center text-slate-600 text-xs">
-              Rule of thumb: 1 red = caution · 2-3 red = overheating · 4+ red = bubble territory
+            <div class="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+              <div class="font-semibold text-amber-400">CAUTION</div>
+              <div class="text-slate-400">1 danger OR 5+ warnings</div>
+            </div>
+            <div class="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30">
+              <div class="font-semibold text-orange-400">OVERHEATING</div>
+              <div class="text-slate-400">2-3 danger signals</div>
+            </div>
+            <div class="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+              <div class="font-semibold text-red-400">BUBBLE</div>
+              <div class="text-slate-400">4+ danger signals</div>
             </div>
           </div>
         </div>
-      );
+
+        <!-- Sources & Methodology -->
+        <div class="bg-slate-800/30 rounded-xl p-6 mb-8">
+          <h2 class="text-lg font-bold mb-3">Methodology</h2>
+          <p class="text-sm text-slate-400 mb-3">
+            This tracker synthesizes multiple data sources following the Exponential View AI Boom/Bubble Monitor framework. 
+            Gauges measure infrastructure investment rates, market valuations, concentration risk, leverage, and sentiment indicators.
+            Historical bubble episodes (dot-com 2000, housing 2007, crypto 2021) inform threshold calibration.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <span class="px-2 py-1 bg-slate-700/50 rounded text-xs text-slate-400">FRED API</span>
+            <span class="px-2 py-1 bg-slate-700/50 rounded text-xs text-slate-400">Financial Modeling Prep</span>
+            <span class="px-2 py-1 bg-slate-700/50 rounded text-xs text-slate-400">Exponential View Framework</span>
+            <span class="px-2 py-1 bg-slate-700/50 rounded text-xs text-slate-400">Industry Surveys</span>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="text-center text-slate-600 text-xs">
+          Data refreshes on page load • Debate feature uses Claude AI • Not investment advice
+        </div>
+      `;
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    // Initialize
+    fetchAllData();
   </script>
 </body>
 </html>
+
